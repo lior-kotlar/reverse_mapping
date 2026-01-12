@@ -2,12 +2,15 @@ import h5py
 import os
 import matplotlib.pyplot as plt
 import numpy as np
-from utils import angle_between_planes, extract_and_validate_peaks, OUTPUT_DIR
+from utils import *
 
 flight_data_file_path = '../pose-estimation-torch/predict_output/debug_outputs/sagiv_free_flight/mov1/mov1_analysis_smoothed.h5' 
 
 UPPER_PLANE_POINTS = [1, 3, 7]
 LOWER_PLANE_POINTS = [3, 4, 7]
+STROKE_ORDER_OF_FIT = 3
+DEVIATION_ORDER_OF_FIT = 7
+TWIST_ORDER_OF_FIT = 7
 
 
 class FlightData:
@@ -28,46 +31,48 @@ class FlightData:
             self.deviation_angle_right = f['wings_theta_right'][:] # shape (num_frames,)
             self.twist_angle_left = f['wings_psi_left'][:] # shape (num_frames,)
             self.twist_angle_right = f['wings_psi_right'][:] # shape (num_frames,)
-            self.variable_cofig = {
-                'stroke': 5,
-                'deviation': 5,
-                'twist': 5
+            self.variable_config = {
+                'stroke': STROKE_ORDER_OF_FIT,
+                'deviation': DEVIATION_ORDER_OF_FIT,
+                'twist': TWIST_ORDER_OF_FIT
             }
+            self.right_peak_indices = extract_and_validate_peaks(self.stroke_angle_right)
+            self.left_peak_indices = extract_and_validate_peaks(self.stroke_angle_left)
 
-    def coefficients_for_wingbeat(self, wingbeat_signal, order=5):
-        num_points = len(wingbeat_signal)
-        
-        phase = np.linspace(0, 2 * np.pi, num_points)
-        
-        num_cols = 2 + 2 * order
-        A = np.zeros((num_points, num_cols))
-        
-        A[:, 0] = phase - np.pi  # Linear Term
-        A[:, 1] = 1.0            # DC Term
-        
-        for k in range(1, order + 1):
-            A[:, 2*k]     = np.cos(k * phase)
-            A[:, 2*k + 1] = np.sin(k * phase)
-            
-        coeffs, _, _, _ = np.linalg.lstsq(A, wingbeat_signal, rcond=None)
-        return coeffs
+    def set_order_of_fit(self, order):
+        self.variable_config = {
+            'stroke': order,
+            'deviation': order,
+            'twist': order
+        }
     
-    def construct_coefficient_matrices(self, peak_indices_right, peak_indices_left):
-        xl_ncols = len(self.variable_cofig.keys())
-        xp_ncols = sum([1 + 2*order for order in self.variable_cofig.values()])
+    def construct_coefficient_matrices(self):
+        xl_ncols = len(self.variable_config.keys())
+        xp_ncols = sum([1 + 2*order for order in self.variable_config.values()])
         rows_list_xl = []
         rows_list_xp = []
-        num_beats = min(len(peak_indices_left), len(peak_indices_right)) - 1
+
+        self.row_map = []  # To keep track of which row corresponds to which beat and side
+
+        num_beats = min(len(self.left_peak_indices), len(self.right_peak_indices)) - 1
         for i in range(num_beats):
-            for side, peaks in [('right', peak_indices_right), ('left', peak_indices_left)]:
+            for side, peaks in [('right', self.right_peak_indices), ('left', self.left_peak_indices)]:
                 start_idx = peaks[i]
                 end_idx = peaks[i+1]
+
+                self.row_map.append({
+                    'beat_index': i,
+                    'side': side,
+                    'start_idx': start_idx,
+                    'end_idx': end_idx
+                })
+
                 row_xl = []
                 row_xp = []
-                for angle, order in self.variable_cofig.items():
+                for angle, order in self.variable_config.items():
                     angle_array = getattr(self, f"{angle}_angle_{side}")
                     
-                    coeffs = self.coefficients_for_wingbeat(angle_array[start_idx:end_idx], order=order)
+                    coeffs = coefficients_for_wingbeat(angle_array[start_idx:end_idx], order=order)
                     row_xl.append(coeffs[0])  # Linear Term
                     row_xp.extend(coeffs[1:])  # DC + Harmonics
                 
@@ -76,15 +81,62 @@ class FlightData:
         
         xl = np.array(rows_list_xl)
         xp = np.array(rows_list_xp)
-        print(f"Coefficient Matrix xl Shape: {xl.shape}, expected ({num_beats*2}, {xl_ncols})")
-        print(f"Coefficient Matrix xp Shape: {xp.shape}, expected ({num_beats*2}, {xp_ncols})")
+        # print(f"Coefficient Matrix xl Shape: {xl.shape}, expected ({num_beats*2}, {xl_ncols})")
+        # print(f"Coefficient Matrix xp Shape: {xp.shape}, expected ({num_beats*2}, {xp_ncols})")
         return xl, xp
     
-    def from_raw_data_to_coef_matrices(self):
-        right_peak_indices = extract_and_validate_peaks(self.stroke_angle_right)
-        left_peak_indices = extract_and_validate_peaks(self.stroke_angle_left)
-        xl, xp = self.construct_coefficient_matrices(right_peak_indices, left_peak_indices)
-        return xl, xp
+    def verify_reconstruction(self, xl, xp, row_idx_to_check=0):
+        """
+        Picks a row from the coefficient matrices, reconstructs the signal,
+        and plots it against the original raw data.
+        """
+        if not hasattr(self, 'row_map'):
+            print("Error: Please run construct_coefficient_matrices first to generate row mapping.")
+            return
+
+        meta = self.row_map[row_idx_to_check]
+        beat_idx = meta['beat_index']
+        side = meta['side']
+        start = meta['start_idx']
+        end = meta['end_idx']
+        
+        print(f"Verifying Row {row_idx_to_check}: Beat {beat_idx} ({side}), Frames {start}-{end}")
+
+        row_xl_vals = xl[row_idx_to_check]
+        row_xp_vals = xp[row_idx_to_check]
+        fig, axes = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
+        angle_names = list(self.variable_config.keys()) # ['stroke', 'deviation', 'twist']
+        xp_pointer = 0 # Pointer to track position in the flattened xp row
+        
+        for i, angle_name in enumerate(angle_names):
+            order = self.variable_config[angle_name]
+            angle_array = getattr(self, f"{angle_name}_angle_{side}")
+            original_signal = angle_array[start:end]
+            num_points = len(original_signal)
+            
+            lin_c = row_xl_vals[i]
+            
+            num_periodic = 1 + 2 * order # DC + 2*order harmonics
+            per_c = row_xp_vals[xp_pointer : xp_pointer + num_periodic]
+            xp_pointer += num_periodic # Advance pointer for next angle
+            
+            reconstructed_signal = reconstruct_wingbeat(lin_c, per_c, num_points, order)
+            
+            ax = axes[i]
+            ax.plot(original_signal, 'b-',  linewidth=2, label='Original (Raw)')
+            ax.plot(reconstructed_signal, 'r--', linewidth=2, label='Reconstructed (Fit)')
+            
+            rmse = np.sqrt(np.mean((original_signal - reconstructed_signal)**2))
+            ax.set_title(f"{angle_name.capitalize()} Angle (Order {order}) - RMSE: {rmse:.4f}")
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            ax.set_ylabel("Angle (rad)")
+
+        axes[-1].set_xlabel("Frame Index (within beat)")
+        plt.tight_layout()
+        order_string = "_".join([f"{angle}{self.variable_config[angle]}" for angle in angle_names])
+        plt.savefig(os.path.join(OUTPUT_DIR, f"reconstruction_verification_row{row_idx_to_check}_order{order_string}.png"))
+        plt.close()
 
     def calculate_signed_deformation_angle_per_frame(self, frame):
         """
@@ -132,10 +184,18 @@ class FlightData:
         plt.grid()
         plt.savefig(save_path)
 
+def verification_loop(fd: FlightData, order_range = (3, 8), row_range = (0, 2)):
+    for order in range(order_range[0], order_range[1]+1):
+        print(f"\n--- Verifying Order of Fit: {order} ---")
+        fd.set_order_of_fit(order)
+        xl, xp = fd.construct_coefficient_matrices()
+        for row_idx in range(row_range[0], row_range[1]+1):
+            print(f"\n--- Verifying Row Index: {row_idx} ---")
+            fd.verify_reconstruction(xl, xp, row_idx_to_check=row_idx)
+    print("Verification completed.")
+
 def main():
     fd = FlightData(flight_data_file_path)
-    xl, xp = fd.from_raw_data_to_coef_matrices()
-    print("Coefficient Matrices Computed.")
 
 
 if __name__ == "__main__":

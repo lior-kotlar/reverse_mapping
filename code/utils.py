@@ -176,3 +176,36 @@ def test_fourier_implementation():
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.savefig(save_path)
+
+def create_design_matrix(num_points, num_cols, phase, order):
+    design_matrix = np.zeros((num_points, num_cols))
+    
+    design_matrix[:, 0] = phase - np.pi  # Linear Term
+    design_matrix[:, 1] = 1.0            # DC Term
+    
+    for k in range(1, order + 1):
+        design_matrix[:, 2*k]     = np.cos(k * phase)
+        design_matrix[:, 2*k + 1] = np.sin(k * phase)
+    
+    return design_matrix
+
+def coefficients_for_wingbeat(wingbeat_signal, order=5):
+    num_points = len(wingbeat_signal)
+    phase = np.linspace(0, 2 * np.pi, num_points)
+    num_cols = 2 + 2 * order
+    design_matrix = create_design_matrix(num_points, num_cols, phase, order) 
+    coeffs, _, _, _ = np.linalg.lstsq(design_matrix, wingbeat_signal, rcond=None)
+    return coeffs
+
+def reconstruct_wingbeat(linear_coeff, periodic_coeffs, num_points, order):
+    """
+    Reconstructs the time-domain signal from coefficients.
+    Mathematically: Signal = A * coeffs
+    """
+    phase = np.linspace(0, 2 * np.pi, num_points)
+    num_cols = 2 + 2 * order
+    design_matrix = create_design_matrix(num_points, num_cols, phase, order)
+    full_coeffs = np.concatenate(([linear_coeff], periodic_coeffs))
+    reconstructed_signal = design_matrix @ full_coeffs
+    return reconstructed_signal
+
