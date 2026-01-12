@@ -209,3 +209,16 @@ def reconstruct_wingbeat(linear_coeff, periodic_coeffs, num_points, order):
     reconstructed_signal = design_matrix @ full_coeffs
     return reconstructed_signal
 
+def create_ranges(all_angles_order_range):
+    if len(all_angles_order_range) != 3:
+        raise ValueError("all_angles_order_range must be a tuple of three elements (stroke, deviation, twist).")
+    ranges = [list(range(start, end+1)) for start, end in all_angles_order_range]
+    max_length = max(len(r) for r in ranges)
+    final_ranges = []
+    for r in ranges:
+        if len(r) < max_length:
+            dif = max_length - len(r)
+            r.extend([r[-1]] * dif)
+        final_ranges.append(r)
+    return zip(*final_ranges)
+

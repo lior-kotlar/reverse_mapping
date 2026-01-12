@@ -39,11 +39,11 @@ class FlightData:
             self.right_peak_indices = extract_and_validate_peaks(self.stroke_angle_right)
             self.left_peak_indices = extract_and_validate_peaks(self.stroke_angle_left)
 
-    def set_order_of_fit(self, order):
+    def set_order_of_fit(self, stroke_order, deviation_order, twist_order):
         self.variable_config = {
-            'stroke': order,
-            'deviation': order,
-            'twist': order
+            'stroke': stroke_order,
+            'deviation': deviation_order,
+            'twist': twist_order
         }
     
     def construct_coefficient_matrices(self):
@@ -184,10 +184,11 @@ class FlightData:
         plt.grid()
         plt.savefig(save_path)
 
-def verification_loop(fd: FlightData, order_range = (3, 8), row_range = (0, 2)):
-    for order in range(order_range[0], order_range[1]+1):
-        print(f"\n--- Verifying Order of Fit: {order} ---")
-        fd.set_order_of_fit(order)
+def verification_loop(fd: FlightData, order_range = ((3, 4), (7, 8), (7, 8)), row_range = (0, 2)):
+    ranges = create_ranges(order_range)
+    for stroke_order, deviation_order, twist_order in ranges:
+        print(f"\n--- Verifying Orders of Fit: Stroke {stroke_order}, Deviation {deviation_order}, Twist {twist_order} ---")
+        fd.set_order_of_fit(stroke_order, deviation_order, twist_order)
         xl, xp = fd.construct_coefficient_matrices()
         for row_idx in range(row_range[0], row_range[1]+1):
             print(f"\n--- Verifying Row Index: {row_idx} ---")
@@ -196,7 +197,7 @@ def verification_loop(fd: FlightData, order_range = (3, 8), row_range = (0, 2)):
 
 def main():
     fd = FlightData(flight_data_file_path)
-
+    verification_loop(fd, row_range=(0, 1))
 
 if __name__ == "__main__":
     main()
