@@ -208,3 +208,5 @@ __marimo__/
 
 .vscode/
 data/supplementary/
+data/input_data/
+data/plots/
