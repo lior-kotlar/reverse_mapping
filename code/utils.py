@@ -84,7 +84,7 @@ def angle_between_planes(leading_plane_points, trailing_plane_points, reference_
     
     return angle_value.astype(float)
 
-def extract_and_validate_peaks(angle_array):
+def extract_and_validate_peaks(angle_array, plot=False):
     """
     Extracts indices of local maxima and minima from the phi array 
     and plots them for validation.
@@ -94,19 +94,20 @@ def extract_and_validate_peaks(angle_array):
     angle_array = np.array(angle_array)
     max_indices, _ = find_peaks(angle_array, distance=45)
     min_indices, _ = find_peaks(-angle_array, distance=45)
-            
-    plt.figure(figsize=(12, 5))
-    plt.plot(angle_array, label='Phi Angle', color='black', linewidth=1.5, alpha=0.7)
-    plt.scatter(max_indices, angle_array[max_indices], color='red', s=50, zorder=5, label='Frontstroke Peaks (Max)')
-    plt.scatter(min_indices, angle_array[min_indices], color='blue', s=50, zorder=5, label='Backstroke Peaks (Min)')
     
-    plt.title("Validation: Phi Angle Peak Extraction")
-    plt.xlabel("Frame Index")
-    plt.ylabel("Phi Angle (rad)")
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.6)
-    plt.tight_layout()
-    plt.savefig(save_path)
+    if plot:
+        plt.figure(figsize=(12, 5))
+        plt.plot(angle_array, label='Phi Angle', color='black', linewidth=1.5, alpha=0.7)
+        plt.scatter(max_indices, angle_array[max_indices], color='red', s=50, zorder=5, label='Frontstroke Peaks (Max)')
+        plt.scatter(min_indices, angle_array[min_indices], color='blue', s=50, zorder=5, label='Backstroke Peaks (Min)')
+        
+        plt.title("Validation: Phi Angle Peak Extraction")
+        plt.xlabel("Frame Index")
+        plt.ylabel("Phi Angle (rad)")
+        plt.legend()
+        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.tight_layout()
+        plt.savefig(save_path)
 
     return min_indices
 
@@ -197,21 +198,9 @@ def coefficients_for_wingbeat(wingbeat_signal, order=5):
     coeffs, _, _, _ = np.linalg.lstsq(design_matrix, wingbeat_signal, rcond=None)
     return coeffs
 
-def reconstruct_wingbeat(linear_coeff, periodic_coeffs, num_points, order):
-    """
-    Reconstructs the time-domain signal from coefficients.
-    Mathematically: Signal = A * coeffs
-    """
-    phase = np.linspace(0, 2 * np.pi, num_points)
-    num_cols = 2 + 2 * order
-    design_matrix = create_design_matrix(num_points, num_cols, phase, order)
-    full_coeffs = np.concatenate(([linear_coeff], periodic_coeffs))
-    reconstructed_signal = design_matrix @ full_coeffs
-    return reconstructed_signal
-
 def create_ranges(all_angles_order_range):
     if len(all_angles_order_range) != 3:
-        raise ValueError("all_angles_order_range must be a tuple of three elements (stroke, deviation, twist).")
+        raise ValueError("all_angles_order_range must be a tuple of three elements (stroke, deviation, wing_pitch).")
     ranges = [list(range(start, end+1)) for start, end in all_angles_order_range]
     max_length = max(len(r) for r in ranges)
     final_ranges = []
